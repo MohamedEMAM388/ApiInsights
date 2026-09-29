@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ApiInsights</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --text:#1c2128; --muted:#6b7280; --line:#e5e7eb; --warn:#b45309; --bad:#b91c1c; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1318; --card:#171c23; --text:#e6e8eb; --muted:#8b95a1; --line:#2a313a; --warn:#fbbf24; --bad:#f87171; --accent:#60a5fa; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:baseline; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--line); background:var(--card); }
+  h1 { margin:0; font-size:18px; }
+  h2 { margin:0 0 10px; font-size:15px; }
+  #meta { color:var(--muted); font-size:13px; }
+  main { max-width:1200px; margin:0 auto; padding:20px 24px 40px; display:grid; gap:20px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
+  th.sortable { cursor:pointer; user-select:none; }
+  th.sortable:hover { color:var(--accent); }
+  tr:last-child td { border-bottom:none; }
+  .warn { color:var(--warn); } .bad { color:var(--bad); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
+  .copy { cursor:pointer; } .copy:hover { color:var(--accent); }
+  .empty { color:var(--muted); padding:8px 2px; }
+  #err { color:var(--bad); }
+</style>
+</head>
+<body data-url="{{DATA_URL}}" data-refresh="{{REFRESH_SECONDS}}">
+<header>
+  <h1>📡 ApiInsights</h1>
+  <span id="meta">Loading…</span>
+</header>
+<main>
+  <section>
+    <h2>Endpoints</h2>
+    <table id="endpoints"><thead></thead><tbody></tbody></table>
+    <div id="endpoints-empty" class="empty" hidden>No requests recorded yet.</div>
+  </section>
+  <section>
+    <h2>Slowest requests <span class="mono" style="color:var(--muted)">(click an ID to copy)</span></h2>
+    <table id="slow"><thead></thead><tbody></tbody></table>
+    <div id="slow-empty" class="empty" hidden>Nothing yet.</div>
+  </section>
+  <section>
+    <h2>Recent errors (5xx)</h2>
+    <table id="errors"><thead></thead><tbody></tbody></table>
+    <div id="errors-empty" class="empty" hidden>No errors. 🎉</div>
+  </section>
+  <div id="err"></div>
+</main>
+
+<script>
+(function () {
+  var url = document.body.dataset.url;
+  var refresh = Math.max(1, Number(document.body.dataset.refresh) || 5);
+  var data = null, sortKey = 'calls', sortDir = -1;
+
+  var endpointCols = [
+    ['method', 'Method'], ['route', 'Route'], ['calls', 'Calls'], ['avgMs', 'Avg ms'],
+    ['p95Ms', 'p95 ms'], ['clientErrorRate', '4xx %'], ['serverErrorRate', '5xx %'], ['lastCallUtc', 'Last call']
+  ];
+  var hitCols = ['Time', 'Method', 'Path', 'Status', 'ms', 'Correlation ID'];
+
+  // Everything from the API (paths, IDs...) is untrusted: only ever use textContent, never innerHTML.
+  function cell(text, cls) {
+    var td = document.createElement('td');
+    td.textContent = text == null ? '' : String(text);
+    if (cls) td.className = cls;
+    return td;
+  }
+  function th(text, cls, onclick) {
+    var e = document.createElement('th');
+    e.textContent = text;
+    if (cls) e.className = cls;
+    if (onclick) e.addEventListener('click', onclick);
+    return e;
+  }
+  function num(n) { return (Math.round(n * 100) / 100).toString(); }
+  function time(s) { return new Date(s).toLocaleString(); }
+
+  function renderEndpointHead() {
+    var tr = document.createElement('tr');
+    endpointCols.forEach(function (c) {
+      var arrow = c[0] === sortKey ? (sortDir < 0 ? ' ▼' : ' ▲') : '';
+      tr.appendChild(th(c[1] + arrow, 'sortable', function () {
+        if (sortKey === c[0]) sortDir = -sortDir; else { sortKey = c[0]; sortDir = -1; }
+        render();
+      }));
+    });
+    document.querySelector('#endpoints thead').replaceChildren(tr);
+  }
+
+  function renderEndpoints() {
+    renderEndpointHead();
+    var rows = data.endpoints.slice().sort(function (a, b) {
+      var x = a[sortKey], y = b[sortKey];
+      return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sortDir;
+    });
+    document.getElementById('endpoints-empty').hidden = rows.length > 0;
+    document.querySelector('#endpoints tbody').replaceChildren.apply(
+      document.querySelector('#endpoints tbody'),
+      rows.map(function (e) {
+        var tr = document.createElement('tr');
+        tr.append(
+          cell(e.method), cell(e.route, 'mono'), cell(e.calls), cell(num(e.avgMs)), cell(num(e.p95Ms)),
+          cell(num(e.clientErrorRate), e.clientErrorRate > 0 ? 'warn' : ''),
+          cell(num(e.serverErrorRate), e.serverErrorRate > 0 ? 'bad' : ''),
+          cell(time(e.lastCallUtc))
+        );
+        return tr;
+      })
+    );
+  }
+
+  function renderHits(tableId, emptyId, hits) {
+    var head = document.createElement('tr');
+    hitCols.forEach(function (c) { head.appendChild(th(c)); });
+    document.querySelector('#' + tableId + ' thead').replaceChildren(head);
+
+    document.getElementById(emptyId).hidden = hits.length > 0;
+    var tbody = document.querySelector('#' + tableId + ' tbody');
+    tbody.replaceChildren.apply(tbody, hits.map(function (h) {
+      var tr = document.createElement('tr');
+      var id = cell(h.correlationId || '—', 'mono copy');
+      if (h.correlationId) {
+        id.title = 'Click to copy';
+        id.addEventListener('click', function () {
+          if (navigator.clipboard) navigator.clipboard.writeText(h.correlationId);
+        });
+      }
+      tr.append(
+        cell(time(h.timestampUtc)), cell(h.method), cell(h.path, 'mono'),
+        cell(h.statusCode, h.statusCode >= 500 ? 'bad' : (h.statusCode >= 400 ? 'warn' : '')),
+        cell(num(h.durationMs)), id
+      );
+      return tr;
+    }));
+  }
+
+  function render() {
+    document.getElementById('meta').textContent =
+      data.totalRequests + ' requests since ' + time(data.startedUtc) + ' · refresh every ' + refresh + 's';
+    renderEndpoints();
+    renderHits('slow', 'slow-empty', data.slowestRequests);
+    renderHits('errors', 'errors-empty', data.recentErrors);
+  }
+
+  function load() {
+    fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) { data = d; document.getElementById('err').textContent = ''; render(); })
+      .catch(function (e) { document.getElementById('err').textContent = 'Failed to load stats: ' + e.message; });
+  }
+
+  load();
+  setInterval(load, refresh * 1000);
+})();
+</script>
+</body>
+</html>

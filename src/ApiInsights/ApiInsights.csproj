@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ApiInsights</RootNamespace>
+
+    <PackageId>ApiInsights</PackageId>
+    <Version>0.1.0-preview.1</Version>
+    <Description>Correlation ID + usage analytics + built-in dashboard for ASP.NET Core APIs. Two lines in Program.cs, zero infrastructure.</Description>
+    <PackageTags>aspnetcore;correlation-id;analytics;middleware;dashboard;observability</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Dashboard\dashboard.html" LogicalName="dashboard.html" />
+    <InternalsVisibleTo Include="ApiInsights.Tests" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Condition="Exists('..\..\README.md')" />
+  </ItemGroup>
+
+</Project>
